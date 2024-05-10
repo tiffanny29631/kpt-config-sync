@@ -143,7 +143,7 @@ func (u *Updater) declaredCRDs() ([]*v1beta1.CustomResourceDefinition, status.Mu
 // Any errors returned will be prepended with any known conflict errors from the
 // remediator. This is required to preserve errors that have been reported by
 // another reconciler.
-func (u *Updater) Update(ctx context.Context, cache *cacheForCommit) status.MultiError {
+func (u *Updater) Update(ctx context.Context, cache *cacheForCommit, oldCommit string) status.MultiError {
 	u.updateMux.Lock()
 	u.updating = true
 	defer func() {
@@ -151,7 +151,7 @@ func (u *Updater) Update(ctx context.Context, cache *cacheForCommit) status.Mult
 		u.updateMux.Unlock()
 	}()
 
-	updateErrs := u.update(ctx, cache)
+	updateErrs := u.update(ctx, cache, oldCommit)
 
 	// Prepend current conflict and fight errors
 	var errs status.MultiError
@@ -163,7 +163,7 @@ func (u *Updater) Update(ctx context.Context, cache *cacheForCommit) status.Mult
 
 // update performs most of the work for `Update`, making it easier to
 // consistently prepend the conflict errors.
-func (u *Updater) update(ctx context.Context, cache *cacheForCommit) status.MultiError {
+func (u *Updater) update(ctx context.Context, cache *cacheForCommit, oldCommit string) status.MultiError {
 	// Stop remediator workers.
 	// This prevents objects been updated in the wrong order (dependencies).
 	// Continue watching previously declared objects and updating the queue.
@@ -175,7 +175,7 @@ func (u *Updater) update(ctx context.Context, cache *cacheForCommit) status.Mult
 	// longer be remediated, if they drift.
 	if !cache.declaredResourcesUpdated {
 		objs := filesystem.AsCoreObjects(cache.objsToApply)
-		_, err := u.declare(ctx, objs, cache.source.commit)
+		_, err := u.declare(ctx, objs, cache.source.commit, oldCommit)
 		if err != nil {
 			return err
 		}
@@ -223,9 +223,9 @@ func (u *Updater) update(ctx context.Context, cache *cacheForCommit) status.Mult
 	return nil
 }
 
-func (u *Updater) declare(ctx context.Context, objs []client.Object, commit string) ([]client.Object, status.MultiError) {
+func (u *Updater) declare(ctx context.Context, objs []client.Object, commit string, oldCommit string) ([]client.Object, status.MultiError) {
 	klog.V(1).Info("Declared resources updating...")
-	objs, err := u.Resources.Update(ctx, objs, commit)
+	objs, err := u.Resources.Update(ctx, objs, commit, oldCommit)
 	u.setValidationErrs(err)
 	if err != nil {
 		klog.Warningf("Failed to validate declared resources: %v", err)

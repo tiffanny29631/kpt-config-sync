@@ -45,7 +45,7 @@ type Resources struct {
 }
 
 // Update performs an atomic update on the resource declaration set.
-func (r *Resources) Update(ctx context.Context, objects []client.Object, commit string) ([]client.Object, status.Error) {
+func (r *Resources) Update(ctx context.Context, objects []client.Object, commit string, oldCommit string) ([]client.Object, status.Error) {
 	// First build up the new map using a local pointer/reference.
 	newSet := orderedmap.NewOrderedMap[core.ID, *unstructured.Unstructured]()
 	newObjects := []client.Object{}
@@ -68,6 +68,16 @@ func (r *Resources) Update(ctx context.Context, objects []client.Object, commit 
 
 	// Record the declared_resources metric, after parsing but before validation.
 	metrics.RecordDeclaredResources(ctx, commit, len(newObjects))
+	if oldCommit != commit && oldCommit != "" {
+		// Reset the stream value of previous commit to 0 to provide correct input
+		// for the Otel Collector metricstransform processor's MAX aggregation.
+		// This is a temporary fix for issue b/321875474, ensuring the metrics
+		// accurately reflect decreases in declared resources. Eventually we should
+		// migrate to otel-collector-go to use the async gauge so that older streams
+		// won't get updated when there's no longer new values.
+		// TODO: b/339722287
+		metrics.RecordDeclaredResources(ctx, oldCommit, 0)
+	}
 
 	previousSet, _ := r.getObjectMap()
 	if err := deletesAllNamespaces(previousSet, newSet); err != nil {

@@ -47,7 +47,7 @@ func TestUpdate(t *testing.T) {
 	commit := "1"
 	expectedIDs := getIDs(objects)
 
-	newObjects, err := dr.Update(context.Background(), objects, commit)
+	newObjects, err := dr.Update(context.Background(), objects, commit, "")
 	if err != nil {
 		t.Fatalf("unexpected error %v", err)
 	}
@@ -76,7 +76,7 @@ func TestMutateImpossible(t *testing.T) {
 	o2.SetResourceVersion(wantResourceVersion)
 
 	expectedCommit := "example"
-	_, err := dr.Update(context.Background(), []client.Object{o1, o2}, expectedCommit)
+	_, err := dr.Update(context.Background(), []client.Object{o1, o2}, expectedCommit, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func asUnstructured(t *testing.T, o client.Object) *unstructured.Unstructured {
 func TestDeclarations(t *testing.T) {
 	dr := Resources{}
 	expectedCommit := "example"
-	objects, err := dr.Update(context.Background(), testSet, expectedCommit)
+	objects, err := dr.Update(context.Background(), testSet, expectedCommit, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestDeclarations(t *testing.T) {
 func TestGet(t *testing.T) {
 	dr := Resources{}
 	expectedCommit := "example"
-	_, err := dr.Update(context.Background(), testSet, expectedCommit)
+	_, err := dr.Update(context.Background(), testSet, expectedCommit, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestGet(t *testing.T) {
 func TestGVKSet(t *testing.T) {
 	dr := Resources{}
 	expectedCommit := "example"
-	_, err := dr.Update(context.Background(), testSet, expectedCommit)
+	_, err := dr.Update(context.Background(), testSet, expectedCommit, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestGVKSet(t *testing.T) {
 func TestResources_InternalErrorMetricValidation(t *testing.T) {
 	m := testmetrics.RegisterMetrics(metrics.InternalErrorsView)
 	dr := Resources{}
-	if _, err := dr.Update(context.Background(), nilSet, "unused"); err != nil {
+	if _, err := dr.Update(context.Background(), nilSet, "unused", ""); err != nil {
 		t.Fatal(err)
 	}
 	wantMetrics := []*view.Row{

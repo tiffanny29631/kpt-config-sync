@@ -24,9 +24,8 @@ import (
 	monitoringv2 "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"go.uber.org/multierr"
 	"google.golang.org/api/iterator"
-	"google.golang.org/genproto/googleapis/api/metric"
-	"google.golang.org/genproto/googleapis/api/monitoredres"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -42,7 +41,8 @@ import (
 	"kpt.dev/configsync/pkg/core"
 	"kpt.dev/configsync/pkg/kinds"
 	"kpt.dev/configsync/pkg/metrics"
-	ocmetrics "kpt.dev/configsync/pkg/metrics"
+	csmetrics "kpt.dev/configsync/pkg/metrics"
+	rgmetrics "kpt.dev/configsync/pkg/resourcegroup/controllers/metrics"
 	"kpt.dev/configsync/pkg/testing/fake"
 )
 
@@ -54,12 +54,46 @@ const (
 	GCMMetricPrefix               = "custom.googleapis.com/opencensus/config_sync"
 )
 
+var DefaultGCMMetricTypes = []string{
+	csmetrics.APICallDurationName,
+	csmetrics.ReconcilerErrorsName,
+	csmetrics.PipelineErrorName, // name reused in resource group controller
+	csmetrics.ReconcileDurationName,
+	csmetrics.LastSyncName,
+	csmetrics.DeclaredResourcesName,
+	csmetrics.ApplyOperationsName,
+	csmetrics.ApplyDurationName,
+	//csmetrics.InternalErrorsName,
+	rgmetrics.RGReconcileDurationName,
+	rgmetrics.ResourceCountName,
+	rgmetrics.ReadyResourceCountName,
+	rgmetrics.KCCResourceCountName,
+	rgmetrics.ClusterScopedResourceCountName,
+}
+
 var GCMMetricTypes = []string{
-	ocmetrics.ReconcilerErrors.Name(),
-	ocmetrics.PipelineError.Name(),
-	ocmetrics.ReconcileDuration.Name(),
-	ocmetrics.ParserDuration.Name(),
-	ocmetrics.InternalErrors.Name(),
+	csmetrics.APICallDurationName,
+	csmetrics.ReconcilerErrorsName,
+	csmetrics.PipelineErrorName, // name reused in resource group controller
+	csmetrics.ReconcileDurationName,
+	csmetrics.ParserDurationName,
+	csmetrics.LastSyncName,
+	csmetrics.DeclaredResourcesName,
+	csmetrics.ApplyOperationsName,
+	csmetrics.ApplyDurationName,
+	//csmetrics.ResourceFightsName,
+	csmetrics.RemediateDurationName,
+	csmetrics.LastApplyName,
+	//csmetrics.ResourceConflictsName,
+	//csmetrics.InternalErrorsName,
+	rgmetrics.RGReconcileDurationName,
+	rgmetrics.ResourceGroupTotalName,
+	rgmetrics.ResourceCountName,
+	rgmetrics.ReadyResourceCountName,
+	rgmetrics.KCCResourceCountName,
+	rgmetrics.NamespaceCountName,
+	rgmetrics.ClusterScopedResourceCountName,
+	rgmetrics.CRDCountName,
 }
 
 // TestOtelCollectorDeployment validates that metrics reporting works for
@@ -80,22 +114,22 @@ func TestOtelCollectorDeployment(t *testing.T) {
 	)
 	nt.T.Cleanup(func() {
 		if t.Failed() {
-			nt.PodLogs("config-management-monitoring", ocmetrics.OtelCollectorName, "", false)
+			nt.PodLogs("config-management-monitoring", csmetrics.OtelCollectorName, "", false)
 		}
 	})
 	setupMetricsServiceAccount(nt)
 	nt.T.Cleanup(func() {
-		nt.MustKubectl("delete", "cm", ocmetrics.OtelCollectorCustomCM, "-n", configmanagement.MonitoringNamespace, "--ignore-not-found")
+		nt.MustKubectl("delete", "cm", csmetrics.OtelCollectorCustomCM, "-n", configmanagement.MonitoringNamespace, "--ignore-not-found")
 		nt.T.Log("Restart otel-collector pod to reset the ConfigMap and log")
-		nomostest.DeletePodByLabel(nt, "app", ocmetrics.OpenTelemetry, false)
-		if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+		nomostest.DeletePodByLabel(nt, "app", csmetrics.OpenTelemetry, false)
+		if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
 			nt.T.Errorf("otel-collector pod failed to come up after a restart: %v", err)
 		}
 	})
 
 	nt.T.Log("Restart otel-collector pod to refresh the ConfigMap, log and IAM")
-	nomostest.DeletePodByLabel(nt, "app", ocmetrics.OpenTelemetry, false)
-	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+	nomostest.DeletePodByLabel(nt, "app", csmetrics.OpenTelemetry, false)
+	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
 		nt.T.Fatal(err)
 	}
 
@@ -117,19 +151,20 @@ func TestOtelCollectorDeployment(t *testing.T) {
 	}
 	// retry for 2 minutes until metric is accessible from GCM
 	_, err = retry.Retry(120*time.Second, func() error {
-		for _, metricType := range GCMMetricTypes {
+		var err error
+		for _, metricType := range DefaultGCMMetricTypes {
 			descriptor := fmt.Sprintf("%s/%s", GCMMetricPrefix, metricType)
 			it := listMetricInGCM(ctx, nt, client, startTime, descriptor)
-			return validateMetricInGCM(nt, it, descriptor, nt.ClusterName)
+			err = multierr.Append(err, validateMetricInGCM(nt, it, descriptor, nt.ClusterName))
 		}
-		return nil
+		return err
 	})
 	if err != nil {
 		nt.T.Fatal(err)
 	}
 
 	nt.T.Log("Checking the otel-collector log contains no failure...")
-	err = validateDeploymentLogHasNoFailure(nt, ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, MetricExportErrorCaption)
+	err = validateDeploymentLogHasNoFailure(nt, csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, MetricExportErrorCaption)
 	if err != nil {
 		nt.T.Fatal(err)
 	}
@@ -141,24 +176,24 @@ func TestOtelCollectorDeployment(t *testing.T) {
 	nt.T.Log("Apply custom otel-collector ConfigMap that could cause duplicate time series error")
 	nt.MustKubectl("apply", "-f", "../testdata/otel-collector/otel-cm-monarch-rejected-labels.yaml")
 	nt.T.Log("Restart otel-collector pod to refresh the ConfigMap and log")
-	nomostest.DeletePodByLabel(nt, "app", ocmetrics.OpenTelemetry, false)
-	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+	nomostest.DeletePodByLabel(nt, "app", csmetrics.OpenTelemetry, false)
+	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
 		nt.T.Fatal(err)
 	}
 
 	nt.T.Log("Checking the otel-collector log contains failure...")
 	_, err = retry.Retry(60*time.Second, func() error {
-		return validateDeploymentLogHasFailure(nt, ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, MetricExportErrorCaption)
+		return validateDeploymentLogHasFailure(nt, csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, MetricExportErrorCaption)
 	})
 	if err != nil {
 		nt.T.Fatal(err)
 	}
 
 	nt.T.Log("Remove otel-collector ConfigMap that creates duplicated time series error")
-	nt.MustKubectl("delete", "cm", ocmetrics.OtelCollectorCustomCM, "-n", configmanagement.MonitoringNamespace, "--ignore-not-found")
+	nt.MustKubectl("delete", "cm", csmetrics.OtelCollectorCustomCM, "-n", configmanagement.MonitoringNamespace, "--ignore-not-found")
 	nt.T.Log("Restart otel-collector pod to refresh the ConfigMap, log and IAM")
-	nomostest.DeletePodByLabel(nt, "app", ocmetrics.OpenTelemetry, false)
-	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+	nomostest.DeletePodByLabel(nt, "app", csmetrics.OpenTelemetry, false)
+	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
 		nt.T.Fatal(err)
 	}
 
@@ -179,32 +214,132 @@ func TestOtelCollectorDeployment(t *testing.T) {
 
 	// retry for 2 minutes until metric is accessible from GCM
 	_, err = retry.Retry(120*time.Second, func() error {
-		for _, metricType := range GCMMetricTypes {
+		var err error
+		for _, metricType := range DefaultGCMMetricTypes {
 			descriptor := fmt.Sprintf("%s/%s", GCMMetricPrefix, metricType)
 			it := listMetricInGCM(ctx, nt, client, startTime, descriptor)
-			return validateMetricInGCM(nt, it, descriptor, nt.ClusterName)
+			err = multierr.Append(err, validateMetricInGCM(nt, it, descriptor, nt.ClusterName))
 		}
-		return nil
+		return err
 	})
 	if err != nil {
 		nt.T.Fatal(err)
 	}
 
 	nt.T.Log("Checking the otel-collector log contains no failure...")
-	err = validateDeploymentLogHasNoFailure(nt, ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, MetricExportErrorCaption)
+	err = validateDeploymentLogHasNoFailure(nt, csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, MetricExportErrorCaption)
 	if err != nil {
 		nt.T.Fatal(err)
 	}
 
 	nt.T.Log("Apply custom otel-collector ConfigMap that could cause Monarch label rejected error")
 	nt.MustKubectl("apply", "-f", "../testdata/otel-collector/otel-cm-kustomize-rejected-labels.yaml")
-	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
 		nt.T.Fatal(err)
 	}
 
 	nt.T.Log("Checking the otel-collector log contains failure...")
 	_, err = retry.Retry(60*time.Second, func() error {
-		return validateDeploymentLogHasFailure(nt, ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, UnrecognizedLabelErrorCaption)
+		return validateDeploymentLogHasFailure(nt, csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace, UnrecognizedLabelErrorCaption)
+	})
+	if err != nil {
+		nt.T.Fatal(err)
+	}
+}
+
+func TestGCMMetrics(t *testing.T) {
+	nt := nomostest.New(t,
+		nomostesting.Reconciliation1,
+		ntopts.RequireGKE(t),
+		ntopts.Unstructured,
+	)
+	nt.T.Cleanup(func() {
+		if t.Failed() {
+			nt.PodLogs("config-management-monitoring", csmetrics.OtelCollectorName, "", false)
+		}
+	})
+	setupMetricsServiceAccount(nt)
+	nt.T.Cleanup(func() {
+		nt.MustKubectl("delete", "cm", csmetrics.OtelCollectorCustomCM, "-n", configmanagement.MonitoringNamespace, "--ignore-not-found")
+		nt.T.Log("Restart otel-collector pod to reset the ConfigMap and log")
+		nomostest.DeletePodByLabel(nt, "app", csmetrics.OpenTelemetry, false)
+		if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+			nt.T.Errorf("otel-collector pod failed to come up after a restart: %v", err)
+		}
+	})
+
+	nt.T.Log("Apply custom otel-collector ConfigMap that exports full metric list to GCM")
+	nt.MustKubectl("apply", "-f", "../testdata/otel-collector/otel-cm-full-gcm.yaml")
+	nt.T.Log("Restart otel-collector pod to refresh the ConfigMap and log")
+	nomostest.DeletePodByLabel(nt, "app", csmetrics.OpenTelemetry, false)
+	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+		nt.T.Fatal(err)
+	}
+
+	startTime := time.Now().UTC()
+
+	nt.T.Log("Watch for full list of metrics in GCM, timeout 2 minutes")
+	ctx := nt.Context
+	client, err := createGCMClient(ctx)
+	if err != nil {
+		nt.T.Fatal(err)
+	}
+	_, err = retry.Retry(60*time.Second, func() error {
+		var err error
+		for _, metricType := range GCMMetricTypes {
+			descriptor := fmt.Sprintf("%s/%s", GCMMetricPrefix, metricType)
+			it := listMetricInGCM(ctx, nt, client, startTime, descriptor)
+			err = multierr.Append(err, validateMetricInGCM(nt, it, descriptor, nt.ClusterName))
+		}
+		return err
+	})
+	if err != nil {
+		nt.T.Fatal(err)
+	}
+
+	nt.T.Log("Adding test namespace")
+	namespace := fake.NamespaceObject("foo")
+	nt.Must(nt.RootRepos[configsync.RootSyncName].Add("acme/ns.yaml", namespace))
+	nt.Must(nt.RootRepos[configsync.RootSyncName].CommitAndPush("Adding foo namespace"))
+	if err := nt.WatchForAllSyncs(); err != nil {
+		nt.T.Fatal(err)
+	}
+
+	nt.T.Log("Checking resource related metrics after adding test resource")
+	resourceMetrics := []string{
+		csmetrics.DeclaredResourcesName,
+		rgmetrics.ResourceCountName,
+		rgmetrics.ReadyResourceCountName,
+	}
+	_, err = retry.Retry(60*time.Second, func() error {
+		var err error
+		for _, metricType := range resourceMetrics {
+			descriptor := fmt.Sprintf("%s/%s", GCMMetricPrefix, metricType)
+			it := listMetricInGCM(ctx, nt, client, startTime, descriptor)
+			err = multierr.Append(err, validateMetricInGCM(nt, it, descriptor, nt.ClusterName, metricHasValue(3)))
+		}
+		return err
+	})
+	if err != nil {
+		nt.T.Fatal(err)
+	}
+
+	nt.T.Log("Remove the test resource")
+	nt.Must(nt.RootRepos[configsync.RootSyncName].Remove("acme/ns.yaml"))
+	nt.Must(nt.RootRepos[configsync.RootSyncName].CommitAndPush("Remove the test namespace"))
+	if err := nt.WatchForAllSyncs(); err != nil {
+		nt.T.Fatal(err)
+	}
+
+	nt.T.Log("Checking resource related metrics after removing test resource")
+	_, err = retry.Retry(60*time.Second, func() error {
+		var err error
+		for _, metricType := range resourceMetrics {
+			descriptor := fmt.Sprintf("%s/%s", GCMMetricPrefix, metricType)
+			it := listMetricInGCM(ctx, nt, client, startTime, descriptor)
+			err = multierr.Append(err, validateMetricInGCM(nt, it, descriptor, nt.ClusterName, metricHasLastestValue(2)))
+		}
+		return err
 	})
 	if err != nil {
 		nt.T.Fatal(err)
@@ -227,8 +362,8 @@ func TestOtelCollectorGCMLabelAggregation(t *testing.T) {
 	setupMetricsServiceAccount(nt)
 
 	nt.T.Log("Restarting the otel-collector pod to refresh the service account")
-	nomostest.DeletePodByLabel(nt, "app", ocmetrics.OpenTelemetry, false)
-	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), ocmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
+	nomostest.DeletePodByLabel(nt, "app", csmetrics.OpenTelemetry, false)
+	if err := nt.Watcher.WatchForCurrentStatus(kinds.Deployment(), csmetrics.OtelCollectorName, configmanagement.MonitoringNamespace); err != nil {
 		nt.T.Fatal(err)
 	}
 
@@ -244,10 +379,9 @@ func TestOtelCollectorGCMLabelAggregation(t *testing.T) {
 
 	// The following metrics are sent to GCM and aggregated to remove the "commit" label.
 	var metricsWithCommitLabel = []string{
-		ocmetrics.LastSync.Name(),
-		ocmetrics.DeclaredResources.Name(),
-		ocmetrics.ApplyDuration.Name(),
-		// LastApply also has commit but is filtered by filter/cloudmonitoring.
+		csmetrics.LastSyncName,
+		csmetrics.DeclaredResourcesName,
+		csmetrics.ApplyDurationName,
 	}
 
 	nt.T.Log("Watch for metrics in GCM, timeout 2 minutes")
@@ -258,13 +392,14 @@ func TestOtelCollectorGCMLabelAggregation(t *testing.T) {
 	}
 	// retry for 2 minutes until metric is accessible from GCM
 	_, err = retry.Retry(120*time.Second, func() error {
+		var err error
 		for _, metricType := range metricsWithCommitLabel {
 			descriptor := fmt.Sprintf("%s/%s", GCMMetricPrefix, metricType)
 			it := listMetricInGCM(ctx, nt, client, startTime, descriptor)
-			return validateMetricInGCM(nt, it, descriptor, nt.ClusterName,
-				metricDoesNotHaveLabel(metrics.KeyCommit.Name()))
+			err = multierr.Append(err, validateMetricInGCM(nt, it, descriptor, nt.ClusterName,
+				metricDoesNotHaveLabel(metrics.KeyCommit.Name())))
 		}
-		return nil
+		return err
 	})
 	if err != nil {
 		nt.T.Fatal(err)
@@ -370,7 +505,7 @@ func listMetricInGCM(ctx context.Context, nt *nomostest.NT, client *monitoringv2
 	endTime := time.Now().UTC()
 	req := &monitoringpb.ListTimeSeriesRequest{
 		Name:   "projects/" + *e2e.GCPProject,
-		Filter: `metric.type="` + metricType + `" AND resource.labels.cluster_name="` + nt.ClusterName + `"`,
+		Filter: `metric.type="` + metricType + `" AND resource.labels.cluster_name="` + nt.ClusterName + `" AND resource.type="k8s_container"`,
 		Interval: &monitoringpb.TimeInterval{
 			StartTime: &timestamp.Timestamp{
 				Seconds: startTime.Unix(),
@@ -379,20 +514,43 @@ func listMetricInGCM(ctx context.Context, nt *nomostest.NT, client *monitoringv2
 				Seconds: endTime.Unix(),
 			},
 		},
-		View: monitoringpb.ListTimeSeriesRequest_HEADERS,
+		View: monitoringpb.ListTimeSeriesRequest_FULL,
 	}
 	return client.ListTimeSeries(ctx, req)
 }
 
-type metricValidatorFunc func(*metric.Metric, *monitoredres.MonitoredResource) error
+type metricValidatorFunc func(series *monitoringpb.TimeSeries) error
 
 func metricDoesNotHaveLabel(label string) metricValidatorFunc {
-	return func(_ *metric.Metric, r *monitoredres.MonitoredResource) error {
-		labels := r.GetLabels()
+	return func(series *monitoringpb.TimeSeries) error {
+		labels := series.GetResource().GetLabels()
 		if value, found := labels[label]; found {
 			return fmt.Errorf("expected metric to not have label, but found %s=%s", label, value)
 		}
 		return nil
+	}
+}
+
+func metricHasValue(value int64) metricValidatorFunc {
+	return func(serie *monitoringpb.TimeSeries) error {
+		points := serie.GetPoints()
+		for _, point := range points {
+			if point.GetValue().GetInt64Value() == value {
+				return nil
+			}
+		}
+		return fmt.Errorf("expected metric to have value %v but did not find in response", value)
+	}
+}
+
+func metricHasLastestValue(value int64) metricValidatorFunc {
+	return func(serie *monitoringpb.TimeSeries) error {
+		points := serie.GetPoints()
+		lastPoint := points[len(points)-1]
+		if lastPoint.GetValue().GetInt64Value() == value {
+			return nil
+		}
+		return fmt.Errorf("expected metric to have value %v but did not find in response", value)
 	}
 }
 
@@ -415,7 +573,7 @@ func validateMetricInGCM(nt *nomostest.NT, it *monitoringv2.TimeSeriesIterator, 
 			labels := resource.GetLabels()
 			if labels["cluster_name"] == clusterName {
 				for _, valFn := range valFns {
-					if err := valFn(metric, resource); err != nil {
+					if err := valFn(resp); err != nil {
 						return fmt.Errorf("GCM metric %s failed validation (cluster_name=%s): %w", metricType, nt.ClusterName, err)
 					}
 				}

@@ -511,6 +511,7 @@ func parseAndUpdate(ctx context.Context, p Parser, trigger string, state *reconc
 	klog.V(3).Info("Parser starting...")
 	sourceErrs := parseSource(ctx, p, trigger, state)
 	klog.V(3).Info("Parser stopped")
+	oldCommit := state.sourceStatus.commit
 	newSourceStatus := sourceStatus{
 		commit:     state.cache.source.commit,
 		errs:       sourceErrs,
@@ -539,7 +540,7 @@ func parseAndUpdate(ctx context.Context, p Parser, trigger string, state *reconc
 
 	klog.V(3).Info("Updater starting...")
 	start := time.Now()
-	syncErrs := p.options().Update(ctx, &state.cache)
+	syncErrs := p.options().Update(ctx, &state.cache, oldCommit)
 	metrics.RecordParserDuration(ctx, trigger, "update", metrics.StatusTagKey(syncErrs), start)
 	klog.V(3).Info("Updater stopped")
 
