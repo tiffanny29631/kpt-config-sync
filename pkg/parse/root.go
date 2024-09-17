@@ -261,6 +261,38 @@ func setSourceStatusFields(source *v1beta1.SourceStatus, newStatus *SourceStatus
 	source.LastUpdate = newStatus.LastUpdate
 }
 
+func (p *root) setSourceAnnotations(ctx context.Context, commit string) error {
+	rs := &v1beta1.RootSync{}
+	if err := p.Client.Get(ctx, rootsync.ObjectKey(p.SyncName), rs); err != nil {
+		return status.APIServerError(err, "failed to get RootSync for parser")
+	}
+	existing := rs.DeepCopy()
+	currentSourceCommit := rs.GetAnnotations()[metadata.SourceCommitAnnotationKey]
+	currentImageUrl := rs.GetAnnotations()[metadata.ImageURLAnnotationKey]
+	if commit != currentSourceCommit || p.Options.SourceRepo != currentImageUrl {
+		core.SetAnnotation(rs, metadata.SourceCommitAnnotationKey, commit)
+		core.SetAnnotation(rs, metadata.ImageURLAnnotationKey, p.Options.SourceRepo)
+		return p.Client.Patch(ctx, rs, client.MergeFrom(existing), client.FieldOwner(configsync.FieldManager))
+	}
+	return nil
+}
+
+func (p *root) resetSourceAnnotations(ctx context.Context) error {
+	rs := &v1beta1.RootSync{}
+	if err := p.Client.Get(ctx, rootsync.ObjectKey(p.SyncName), rs); err != nil {
+		return status.APIServerError(err, "failed to get RootSync for parser")
+	}
+	existing := rs.DeepCopy()
+	_, commitAnnotationFound := rs.GetAnnotations()[metadata.SourceCommitAnnotationKey]
+	_, urlAnnotationFound := rs.GetAnnotations()[metadata.ImageURLAnnotationKey]
+	if commitAnnotationFound || urlAnnotationFound {
+		core.RemoveAnnotations(rs, metadata.SourceCommitAnnotationKey)
+		core.RemoveAnnotations(rs, metadata.ImageURLAnnotationKey)
+		return p.Client.Patch(ctx, rs, client.MergeFrom(existing), client.FieldOwner(configsync.FieldManager))
+	}
+	return nil
+}
+
 func (p *root) setRequiresRendering(ctx context.Context, renderingRequired bool) error {
 	rs := &v1beta1.RootSync{}
 	if err := p.Client.Get(ctx, rootsync.ObjectKey(p.SyncName), rs); err != nil {

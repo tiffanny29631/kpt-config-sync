@@ -144,6 +144,16 @@ const (
 	// reconciler-manager reads it. If set to true, the reconciler-manager will
 	// create the reconciler with the Namespace controller in the reconciler container.
 	DynamicNSSelectorEnabledAnnotationKey = configsync.ConfigSyncPrefix + "dynamic-ns-selector-enabled"
+
+	// ImageURLAnnotationKey is the annotation key applied to R*Sync objects
+	// when pre-sync is either disabled or successfully completed.
+	// This annotation stores the repository or image URL.
+	ImageURLAnnotationKey = configsync.ConfigSyncPrefix + "image-url"
+
+	// ImageURLAnnotationKey is the annotation key applied to R*Sync objects
+	// when pre-sync is either disabled or successfully completed.
+	// This annotation stores the Git commit hash or image digest.
+	SourceCommitAnnotationKey = configsync.ConfigSyncPrefix + "source-commit"
 )
 
 // Lifecycle annotations
