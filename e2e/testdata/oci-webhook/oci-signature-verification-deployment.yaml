@@ -1,0 +1,120 @@
+# Copyright 2024 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-server
+  namespace: oci-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhook-server
+  template:
+    metadata:
+      labels:
+        app: webhook-server
+    spec:
+      imagePullSecrets:
+      - name: regcred
+      serviceAccountName: webhook-server-sa
+      containers:
+      - name: webhook-server
+        command:
+        - /webhook-server
+        image: gcr.io/peip-monitor/webhook-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8443
+        env:
+        - name: COSIGN_CACHE
+          value: "/cache/.sigstore"  # Redirect Cosign cache to /tmp
+        volumeMounts:
+        - name: tls-certs
+          mountPath: "/tls"
+        - name: cosign-key
+          mountPath: "/cosign-key"
+        - name: cosign-cache-volume
+          mountPath: "/cache"  # Mount the volume to /cache
+      volumes:
+      - name: cosign-key
+        secret:
+          secretName: cosign-key
+      - name: tls-certs
+        secret:
+          secretName: webhook-tls
+      - name: cosign-cache-volume
+        emptyDir: { }  # You can replace this with a persistent volume claim if needed
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-service
+  namespace: oci-webhook
+spec:
+  ports:
+  - port: 8443
+    targetPort: 8443
+  selector:
+    app: webhook-server
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: webhook-server-sa
+  namespace: oci-webhook
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: webhook-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  # The admission webhook must be cluster-admin in order to deny requests to any
+  # object on the cluster.
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: webhook-server-sa
+  namespace: oci-webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: image-verification-webhook
+webhooks:
+- name: imageverification.webhook.com
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: oci-webhook
+      path: "/validate"
+      port: 8443
+    caBundle: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUdUekNDQkRlZ0F3SUJBZ0lVSVZhWjVLcitBVEtuWm9odVhlMnB6RWV1OW1Vd0RRWUpLb1pJaHZjTkFRRUwKQlFBd2dZZ3hDekFKQmdOVkJBWVRBazVNTVJVd0V3WURWUVFJREF4YWRXbGtJRWh2Ykd4aGJtUXhFakFRQmdOVgpCQWNNQ1ZKdmRIUmxjbVJoYlRFU01CQUdBMVVFQ2d3SlFVTk5SU0JEYjNKd01SQXdEZ1lEVlFRTERBZEpWQ0JFClpYQjBNU2d3SmdZRFZRUUREQjkzWldKb2IyOXJMWE5sY25acFkyVXViMk5wTFhkbFltaHZiMnN1YzNaak1CNFgKRFRJME1Ea3lNREl6TVRnek1Wb1hEVEkxTURreE1USXpNVGd6TVZvd2dZZ3hDekFKQmdOVkJBWVRBazVNTVJVdwpFd1lEVlFRSURBeGFkV2xrSUVodmJHeGhibVF4RWpBUUJnTlZCQWNNQ1ZKdmRIUmxjbVJoYlRFU01CQUdBMVVFCkNnd0pRVU5OUlNCRGIzSndNUkF3RGdZRFZRUUxEQWRKVkNCRVpYQjBNU2d3SmdZRFZRUUREQjkzWldKb2IyOXIKTFhObGNuWnBZMlV1YjJOcExYZGxZbWh2YjJzdWMzWmpNSUlDSWpBTkJna3Foa2lHOXcwQkFRRUZBQU9DQWc4QQpNSUlDQ2dLQ0FnRUF0emJndHRWb1M1Q3FIaUhkcEpVb2VZM0FRVGFIV1hhYmhsVytnKzdDRjdNR0JKK3l0dnpEClZUWi83QWFjTmwvSGhZVW9OUFNUNVhqMzdwVWQrUm5SSk5iUzRFN0Jib0hKT29rOGh3TzdmWTNtMFNMZmJHQmMKOURwNzZlUlhrUnN1aCtLNXlDSFJNYVhlMTBaSWNzbTJ3cmpuaEk0Z3pnZnJjdWxFT09IY0NVZTZqMWhvWmpybwoySXYySVVHb0Z5TDhKWlZBek45MXBudkVneWdNWnVLdW1TdWpuWHp1TC9RS0VOSG00ZVZrUS9teVBqR0J1T0xwCk1vN0MxZlhlRXpUWnRZY2JRYWpxM0VQWExrQldlZW5jbzhrakNLL2Y4S1NvZU54c2FmTVpOK2xrK3lPdzU3NG4KVFZWQ0Fhc2E2TzJqZlNmNXRseUlhdzNVdmJOejMvTWd5ek5VN3MvN2YxWElIdzlLZ3M4VSttVVBIQ0I5dlNnQgpjVWF5WitIQyswRXpBbUV5cG5tVkxVNWVCNkxvNFNkYlVOTk1aY3d6Y2JkQ1E3VmsvNHNhbm5nWTJmWUhQOGxjCmtnZDkvNnJZdVcvVXA4c1h2WTlQYStFUDlYcEhwNE5xWU1BL2xoL2Z2YUxkQkRXNFE3eS85d3VONHJ1SDlTZDIKQncrWGd6UjAyVXUrSm9ja2xMOGo2VStPS3dOQk01a01NaUtoVXBRb2g3dE0wcFFuNWVzRFFmS2dBRWRwSXlRegowSXB6aUxaYWtsZVdRWDRsUmhZVnRXNmh2Z1RXOHlLNE5rSzNKRVRoTXQwaWxxODF6U1huNFQ2MmlRT05OdG0wCnJmeEcraXB4L0ZvNlRpS2tQRTRXMmVtWW5FcnRRZzZrcHcrK1A5VFFoSzBKbGp5ZDBnRi9YM0VDQXdFQUFhT0IKcmpDQnF6QWRCZ05WSFE0RUZnUVVXTGV2QW0vaTZEMThjRk5uRzJjK2JiSEt3Lzh3SHdZRFZSMGpCQmd3Rm9BVQpXTGV2QW0vaTZEMThjRk5uRzJjK2JiSEt3Lzh3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekJZQmdOVkhSRUVVVEJQCmdnOTNaV0pvYjI5ckxYTmxjblpwWTJXQ0gzZGxZbWh2YjJzdGMyVnlkbWxqWlM1dlkya3RkMlZpYUc5dmF5NXoKZG1PQ0czZGxZbWh2YjJzdGMyVnlkbWxqWlM1dlkya3RkMlZpYUc5dmF6QU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBZ0VBcFZGWE5YRzh0M1lzOEwrN05DT2NoVGFkdjkrMTlUOWtFRlhrM2hkd0RlckhmSStXSDN3VStPcTI1ay9uCjVlZHErUCtLOEkvaU9qRmV6dGc0QjRaWGk2SEQvNmk3Um9FRnE2Zy8wcmFpamd4UysyOVZ0Vjd1NVpCUTNYbEQKS2VBcUNnQmZmYkd2RkdsOGVpNTc0cjZ1b0RyN3FPZUFFelhpODVmUm9Pb21nNnZSOWkrWXBuelpRODlUeExwSApVcEZKc3cyV0FwRUVkRWF2ZkJLQXVDZndxR09HTkdKdGN4T0hQWlk5VmlvRHpoNGNKcjBoZmxISEhVVWhGTWhVCnVoR2l0R1diQ3Njbnk4TVVHck9KT1RLSFVvYVoyZ1R2ZVBuODF6SlJubzBRbTZlMlg4NGQvOGtsbmxZN1RmWGkKc0RqVVJpMjB0QjBLd3RrYmREcDh4SHpjbW82MTc2aG01SEFyWEVyMU5RMG1KRlhxbHRidG9CWVpyQjdXQlF6cgpKeE1MWEtJS0ZyaEd5N05OeEx3STNVM09XQ0RaVGorRUVBSk1JRm9oTFB6dmJicGRMRHpuMVFrV0cySmM2RVhwCmtsSEhJL05QZmxKNmJhVkhKSVRGeDNxeTB1dVd1WVNyUndmRE4zanh2MDFQR1pDSEc1SHBEU3Rsc1JxNWxOY1IKcUcxc0g5ek01Q2lzL1FLV2tMN2NRZGdDQjVaSkR6LzRMOEhvaDVGdEdLbG4vdVVXV3Y0TkRLb3RTUEVjYW04RQpXcW9jT2dSSnpZdDVZZ3FnWXJ5ZEhkd0d0cWNNQ29DeUFZNk1CZlMrOWRFNTNKQ0pCUENZSEU0V1Ixdk9na1IrCjg5dW80MWFxY0VVbm4vaDRHMGwwb3k3cFp3cjY2dmNnaUlJWnJ3ZEcvS1QzcmVJPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
+  rules:
+  - apiGroups:
+    - configsync.gke.io
+    apiVersions:
+    - v1beta1
+    - v1alpha1
+    operations:
+    - UPDATE
+    resources:
+    - 'rootsyncs'
+    - 'reposyncs'
+    scope: '*'
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
