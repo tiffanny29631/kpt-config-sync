@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Blog: PostSync - kpt-config-sync</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://fonts.googleapis.com/css?family=Roboto:400,500,700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Roboto', 'Noto Sans', Arial, sans-serif; margin: 0; background: #f4f8fb; color: #222; }
+    header { background: #2196f3; color: #fff; padding: 2rem 1rem; text-align: center; }
+    nav { margin: 2rem auto; text-align: center; }
+    nav a { margin: 0 1rem; color: #1976d2; text-decoration: none; font-weight: 500; }
+    nav a:hover { text-decoration: underline; }
+    main { max-width: 700px; margin: 2rem auto; background: #fff; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 16px #0002; }
+    .encouragement { text-align: center; font-size: 1.15rem; color: #1976d2; margin-bottom: 1.5rem; font-weight: 500; }
+    .buttons { margin: 2rem 0; text-align: center; }
+    .buttons a { display: inline-block; margin: 0 0.75rem; padding: 1rem 2rem; border-radius: 6px; background: linear-gradient(90deg, #42a5f5 0%, #1976d2 100%); color: #fff; text-decoration: none; font-weight: 600; font-size: 1.1rem; box-shadow: 0 2px 8px #1976d233; border: none; transition: background 0.2s, transform 0.1s, box-shadow 0.2s; cursor: pointer; }
+    .buttons a:hover { background: linear-gradient(90deg, #1976d2 0%, #42a5f5 100%); transform: translateY(-2px) scale(1.04); box-shadow: 0 4px 16px #1976d233; }
+    footer { text-align: center; color: #888; margin: 2rem 0 1rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Blog: PostSync</h1>
+    <p>Introducing the PostSync feature in kpt-config-sync</p>
+  </header>
+  <nav>
+    <a href="../index.html">Home</a>
+    <a href="postsync.html">PostSync Blog</a>
+    <a href="https://github.com/GoogleContainerTools/kpt-config-sync" target="_blank">GitHub Repo</a>
+  </nav>
+  <main>
+    <h2>What is PostSync?</h2>
+    <p>
+      <b>PostSync</b> is an experimental feature in <b>kpt-config-sync</b> that allows you to run custom actions after your resources have been synchronized.
+    </p>
+    <div style="background: #e3f2fd; color: #1565c0; border-left: 5px solid #1976d2; padding: 1rem 1.5rem; margin: 1.5rem 0; border-radius: 6px; font-size: 1.08rem;">
+      <b>Experimental Window:</b> We are collecting feedback and improvement requests for PostSync until <b>12/31 this year</b>.<br>
+      If the feature is actively used and proves useful, we will support it in Config Sync.<br>
+      Otherwise, this feature may be removed after the evaluation period.
+    </div>
+    <h3>Example</h3>
+    <p>
+      See the <a href="../../examples/postsync" target="_blank">./examples/postsync</a> directory for a working example.
+    </p>
+    <h3>Feedback & Contributions</h3>
+    <div class="encouragement">
+      Your feedback matters!<br>Help us make <b>kpt-config-sync</b> even better.
+    </div>
+    <div class="buttons">
+      <a href="https://github.com/GoogleContainerTools/kpt-config-sync/issues/new?template=question.yaml&title=[Question]+PostSync+Feature&labels=question,postsync"
+         target="_blank">Submit Question</a>
+      <a href="https://github.com/GoogleContainerTools/kpt-config-sync/issues/new?template=enhancement.yaml&title=[Improvement]+PostSync+Feature&labels=enhancement,postsync"
+         target="_blank">Improvement Request</a>
+      <a href="https://github.com/GoogleContainerTools/kpt-config-sync/issues/new?template=bug.yaml&title=[Bug]+PostSync+Feature&labels=bug,postsync"
+         target="_blank">Bug Report</a>
+    </div>
+    <p>
+      <b>Note:</b> After clicking, please select the <b>PostSync Experimental Feature</b> milestone in the issue form before submitting.
+    </p>
+  </main>
+  <footer>
+    &copy; 2025 <a href="https://github.com/GoogleContainerTools/kpt-config-sync" target="_blank" style="color:#1976d2;">GoogleContainerTools/kpt-config-sync</a>
+  </footer>
+</body>
+</html>
