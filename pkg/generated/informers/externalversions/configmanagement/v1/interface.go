@@ -9,13 +9,13 @@ import (
 // Interface provides access to all the informers in this group version.
 type Interface interface {
 	// ClusterSelectors returns a ClusterSelectorInformer.
-	ClusterSelectors() TypedClusterSelectorInformer
+	ClusterSelectors() ClusterSelectorInformer
 	// HierarchyConfigs returns a HierarchyConfigInformer.
-	HierarchyConfigs() TypedHierarchyConfigInformer
+	HierarchyConfigs() HierarchyConfigInformer
 	// NamespaceSelectors returns a NamespaceSelectorInformer.
-	NamespaceSelectors() TypedNamespaceSelectorInformer
+	NamespaceSelectors() NamespaceSelectorInformer
 	// Repos returns a RepoInformer.
-	Repos() TypedRepoInformer
+	Repos() RepoInformer
 }
 
 type version struct {
@@ -29,22 +29,22 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
 }
 
-// ClusterSelectors returns a TypedClusterSelectorInformer.
-func (v *version) ClusterSelectors() TypedClusterSelectorInformer {
+// ClusterSelectors returns a ClusterSelectorInformer.
+func (v *version) ClusterSelectors() ClusterSelectorInformer {
 	return &clusterSelectorInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
-// HierarchyConfigs returns a TypedHierarchyConfigInformer.
-func (v *version) HierarchyConfigs() TypedHierarchyConfigInformer {
+// HierarchyConfigs returns a HierarchyConfigInformer.
+func (v *version) HierarchyConfigs() HierarchyConfigInformer {
 	return &hierarchyConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
-// NamespaceSelectors returns a TypedNamespaceSelectorInformer.
-func (v *version) NamespaceSelectors() TypedNamespaceSelectorInformer {
+// NamespaceSelectors returns a NamespaceSelectorInformer.
+func (v *version) NamespaceSelectors() NamespaceSelectorInformer {
 	return &namespaceSelectorInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
-// Repos returns a TypedRepoInformer.
-func (v *version) Repos() TypedRepoInformer {
+// Repos returns a RepoInformer.
+func (v *version) Repos() RepoInformer {
 	return &repoInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
