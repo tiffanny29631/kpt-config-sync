@@ -97,6 +97,8 @@ elif [[ "${UPDATE_TYPE}" == "latest-build" ]]; then
   if [[ "${COMPONENT}" == "debian-base" ]]; then
     BASE_VERSION=$(echo "${CURRENT_TAG}" | sed -E "s/${STRIP_BASE_PATTERN}//")
   else
+    # STRIP_BASE_PATTERN is a glob (e.g. "-gke.*"), so it must stay unquoted.
+    # shellcheck disable=SC2295
     BASE_VERSION=${CURRENT_TAG%${STRIP_BASE_PATTERN}}
   fi
   FILTER="tags:${BASE_VERSION}*"
