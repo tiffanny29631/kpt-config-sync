@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -38,15 +37,21 @@ const (
 	// PrivateSSHKey is secret name of the private SSH key stored in the Cloud Secret Manager.
 	PrivateSSHKey           = "config-sync-ci-ssh-private-key"
 	bitbucketRequestTimeout = 10 * time.Second
+
+	// bitbucketAPITokenSecret is the name of the secret in the Cloud Secret
+	// Manager that stores the Atlassian API token of the CI bot account.
+	// The token is sent as a Bearer token and requires the
+	// read:repository:bitbucket and admin:repository:bitbucket scopes.
+	// Atlassian API tokens expire after at most one year, so the secret must be
+	// renewed before it expires.
+	bitbucketAPITokenSecret = "bitbucket-api-token"
 )
 
 // BitbucketClient is the client that calls the Bitbucket REST APIs.
 type BitbucketClient struct {
-	oauthKey     string
-	oauthSecret  string
-	refreshToken string
-	logger       *testlogger.TestLogger
-	workspace    string
+	apiToken  string
+	logger    *testlogger.TestLogger
+	workspace string
 	// repoSuffix is used to avoid overlap
 	repoSuffix string
 	httpClient *http.Client
@@ -64,16 +69,11 @@ func newBitbucketClient(repoSuffix string, logger *testlogger.TestLogger) (*Bitb
 		httpClient: &http.Client{},
 	}
 
-	var err error
-	if client.oauthKey, err = FetchCloudSecret("bitbucket-oauth-key"); err != nil {
+	apiToken, err := FetchCloudSecret(bitbucketAPITokenSecret)
+	if err != nil {
 		return client, err
 	}
-	if client.oauthSecret, err = FetchCloudSecret("bitbucket-oauth-secret"); err != nil {
-		return client, err
-	}
-	if client.refreshToken, err = FetchCloudSecret("bitbucket-refresh-token"); err != nil {
-		return client, err
-	}
+	client.apiToken = strings.TrimSpace(apiToken)
 	return client, nil
 }
 
@@ -105,25 +105,26 @@ func (b *BitbucketClient) CreateRepository(name string) (string, error) {
 	fullName := b.fullName(name)
 	repoURL := fmt.Sprintf("https://api.bitbucket.org/2.0/repositories/%s/%s", b.workspace, fullName)
 
-	// Create a remote repository on demand with a random localName.
-	accessToken, err := b.refreshAccessToken()
-	if err != nil {
-		return "", err
-	}
-
 	// Check if repository already exists
 	getRequestCtx, getRequestCancel := context.WithTimeout(context.Background(), bitbucketRequestTimeout)
 	defer getRequestCancel()
-	resp, err := b.sendRequest(getRequestCtx, http.MethodGet, repoURL, accessToken, nil)
+	resp, err := b.sendRequest(getRequestCtx, http.MethodGet, repoURL, nil)
 	if err != nil {
 		return "", err
+	}
+	getBody, err := io.ReadAll(resp.Body)
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		b.logger.Infof("failed to close response body: %v\n", closeErr)
+	}
+	if err != nil {
+		return "", fmt.Errorf("error reading response body: %w", err)
 	}
 
 	if resp.StatusCode == http.StatusOK {
 		return fullName, nil
 	} else if resp.StatusCode != http.StatusNotFound {
 		// unexpected error when checking if repository exists
-		return "", fmt.Errorf("failed to check if repository exists: status %d", resp.StatusCode)
+		return "", fmt.Errorf("failed to check if repository exists: status %d: %s", resp.StatusCode, string(getBody))
 	}
 
 	payload := map[string]any{
@@ -142,19 +143,18 @@ func (b *BitbucketClient) CreateRepository(name string) (string, error) {
 
 	// Create new Bitbucket repository
 	postRequestCtx, postRequestCancel := context.WithTimeout(context.Background(), bitbucketRequestTimeout)
-	resp, err = b.sendRequest(postRequestCtx, http.MethodPost, repoURL, accessToken, bytes.NewReader(jsonPayload))
-
+	defer postRequestCancel()
+	resp, err = b.sendRequest(postRequestCtx, http.MethodPost, repoURL, bytes.NewReader(jsonPayload))
+	if err != nil {
+		return "", err
+	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			// Log the error as just printing it might be missed.
 			b.logger.Infof("failed to close response body: %v\n", closeErr)
 		}
-		postRequestCancel()
 	}()
 
-	if err != nil {
-		return "", err
-	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error reading response body: %w", err)
@@ -167,13 +167,13 @@ func (b *BitbucketClient) CreateRepository(name string) (string, error) {
 }
 
 // sendRequest sends an HTTP request to the Bitbucket API.
-func (b *BitbucketClient) sendRequest(ctx context.Context, method, url, accessToken string, body io.Reader) (*http.Response, error) {
+func (b *BitbucketClient) sendRequest(ctx context.Context, method, url string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", b.apiToken))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := b.httpClient.Do(req)
@@ -197,56 +197,6 @@ func (b *BitbucketClient) DeleteRepositories(_ ...string) error {
 // failed to be deleted after the test.
 func (b *BitbucketClient) DeleteObsoleteRepos() error {
 	return nil
-}
-
-func (b *BitbucketClient) refreshAccessToken() (string, error) {
-	tokenURL := "https://bitbucket.org/site/oauth2/access_token"
-	data := url.Values{}
-	data.Set("grant_type", "refresh_token")
-	data.Set("refresh_token", b.refreshToken)
-
-	req, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("creating token refresh request: %w", err)
-	}
-
-	req.SetBasicAuth(b.oauthKey, b.oauthSecret)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := b.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("sending token refresh request: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			b.logger.Infof("failed to close response body: %v\n", closeErr)
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading token refresh response body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("refresh token failed with status %d", resp.StatusCode)
-	}
-
-	var output map[string]interface{}
-	if err := json.Unmarshal(body, &output); err != nil {
-		return "", fmt.Errorf("unmarshalling refresh token response: %w", err)
-	}
-
-	accessToken, ok := output["access_token"]
-	if !ok {
-		return "", fmt.Errorf("no access_token in response")
-	}
-
-	accessTokenStr, ok := accessToken.(string)
-	if !ok {
-		return "", fmt.Errorf("access_token is not a string: %T", accessToken)
-	}
-
-	return accessTokenStr, nil
 }
 
 // FetchCloudSecret fetches secret from Google Cloud Secret Manager.
